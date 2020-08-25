@@ -32,8 +32,6 @@ import com.microsoft.azure.credentials.ApplicationTokenCredentials;
 import com.microsoft.azure.keyvault.KeyVaultClient;
 import com.microsoft.azure.keyvault.authentication.KeyVaultCredentials;
 import com.microsoft.azure.management.Azure;
-import com.microsoft.azure.management.resources.Subscription;
-import com.microsoft.azure.management.resources.Tenant;
 import com.microsoft.azuretools.adauth.PromptBehavior;
 import com.microsoft.azuretools.authmanage.AzureManagerFactory;
 import com.microsoft.azuretools.authmanage.CommonSettings;
@@ -44,7 +42,6 @@ import com.microsoft.azuretools.authmanage.interact.INotification;
 import com.microsoft.azuretools.authmanage.models.AuthMethodDetails;
 import com.microsoft.azuretools.telemetry.TelemetryInterceptor;
 import com.microsoft.azuretools.utils.AzureRegisterProviderNamespaces;
-import com.microsoft.azuretools.utils.Pair;
 import com.microsoft.rest.credentials.ServiceClientCredentials;
 
 import java.io.File;
@@ -52,8 +49,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.LinkedList;
-import java.util.List;
 import java.util.logging.Logger;
 
 import static com.microsoft.azuretools.Constants.FILE_NAME_SUBSCRIPTIONS_DETAILS_SP;
@@ -154,21 +149,8 @@ public class ServicePrincipalAzureManager extends AzureManagerBase {
     }
 
     @Override
-    public List<Subscription> getSubscriptions() throws IOException {
-        List<Subscription> sl = auth().subscriptions().list();
-        return sl;
-    }
-
-    @Override
-    public List<Pair<Subscription, Tenant>> getSubscriptionsWithTenant() throws IOException {
-        List<Pair<Subscription, Tenant>> stl = new LinkedList<>();
-        for (Tenant t : getTenants()) {
-            //String tid = t.tenantId();
-            for (Subscription s : getSubscriptions()) {
-                stl.add(new Pair<>(s, t));
-            }
-        }
-        return stl;
+    protected String getTenantId() throws IOException {
+        return auth().tenantId();
     }
 
     @Override
@@ -185,11 +167,6 @@ public class ServicePrincipalAzureManager extends AzureManagerBase {
     public void drop() throws IOException {
         System.out.println("ServicePrincipalAzureManager.drop()");
         subscriptionManager.cleanSubscriptions();
-    }
-
-    public List<Tenant> getTenants() throws IOException {
-        List<Tenant> tl = auth().tenants().list();
-        return tl;
     }
 
     @Override

@@ -31,13 +31,19 @@ import com.microsoft.azure.management.resources.Subscription;
 import com.microsoft.azure.management.resources.Tenant;
 import com.microsoft.azuretools.authmanage.CommonSettings;
 import com.microsoft.azuretools.authmanage.Environment;
+import com.microsoft.azuretools.authmanage.RefreshableTokenCredentials;
 import com.microsoft.azuretools.telemetry.TelemetryInterceptor;
 import com.microsoft.azuretools.utils.Pair;
 import org.apache.commons.lang3.StringUtils;
+import rx.Observable;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
 
 import static com.microsoft.azuretools.authmanage.Environment.*;
 
@@ -54,6 +60,7 @@ public abstract class AzureManagerBase implements AzureManager {
     protected Map<String, Azure> sidToAzureMap = new ConcurrentHashMap<>();
     protected Map<String, AppPlatformManager> sidToAzureSpringCloudManagerMap = new ConcurrentHashMap<>();
     protected Map<String, InsightsManager> sidToInsightsManagerMap = new ConcurrentHashMap<>();
+    private static final Logger LOGGER = Logger.getLogger(AzureManagerBase.class.getName());
 
     @Override
     public String getPortalUrl() {
@@ -95,5 +102,69 @@ public abstract class AzureManagerBase implements AzureManager {
     protected <T extends AzureConfigurable<T>> T buildAzureManager(AzureConfigurable<T> configurable) {
         return configurable.withInterceptor(new TelemetryInterceptor())
                 .withUserAgent(CommonSettings.USER_AGENT);
+    }
+
+    protected abstract String getTenantId() throws IOException;
+
+    @Override
+    public List<Subscription> getSubscriptions() throws IOException {
+        List<Subscription> sl = new LinkedList<Subscription>();
+        // could be multi tenant - return all subscriptions for the current account
+        List<Tenant> tl = getTenants(getTenantId());
+        for (Tenant t : tl) {
+            sl.addAll(getSubscriptions(t.tenantId()));
+        }
+        return sl;
+    }
+
+    @Override
+    public List<Pair<Subscription, Tenant>> getSubscriptionsWithTenant() throws IOException {
+        List<Pair<Subscription, Tenant>> stl = new LinkedList<>();
+        for (Tenant t : getTenants(getTenantId())) {
+            String tid = t.tenantId();
+            for (Subscription s : getSubscriptions(tid)) {
+                stl.add(new Pair<>(s, t));
+            }
+        }
+        return stl;
+    }
+
+    private List<Subscription> getSubscriptions(String tid) {
+        return authTenant(tid).subscriptions().listAsync()
+                .onErrorResumeNext(err -> {
+                    LOGGER.warning(err.getMessage());
+                    return Observable.empty();
+                })
+                .toList()
+                .toBlocking()
+                .singleOrDefault(Collections.emptyList());
+    }
+
+    private List<Tenant> getTenants(String tid) {
+        return authTenant(tid).tenants().listAsync()
+                .onErrorResumeNext(err -> {
+                    LOGGER.warning(err.getMessage());
+                    return Observable.empty();
+                })
+                .toList()
+                .toBlocking()
+                .singleOrDefault(Collections.emptyList());
+    }
+
+    protected Azure.Authenticated authTenant(String tenantId) {
+        return Azure.configure()
+                .withInterceptor(new TelemetryInterceptor())
+                .withUserAgent(CommonSettings.USER_AGENT)
+                .authenticate(new RefreshableTokenCredentials(this, tenantId));
+    }
+
+    protected AppPlatformManager authSpringCloud(String subscriptionId, String tenantId) {
+        return buildAzureManager(AppPlatformManager.configure())
+                .authenticate(new RefreshableTokenCredentials(this, tenantId), subscriptionId);
+    }
+
+    protected InsightsManager authApplicationInsights(String subscriptionId, String tenantId) {
+        return buildAzureManager(InsightsManager.configure())
+                .authenticate(new RefreshableTokenCredentials(this, tenantId), subscriptionId);
     }
 }

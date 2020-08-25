@@ -27,8 +27,6 @@ import com.microsoft.azure.keyvault.authentication.KeyVaultCredentials;
 import com.microsoft.azure.management.Azure;
 import com.microsoft.azure.management.applicationinsights.v2015_05_01.implementation.InsightsManager;
 import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.AppPlatformManager;
-import com.microsoft.azure.management.resources.Subscription;
-import com.microsoft.azure.management.resources.Tenant;
 import com.microsoft.azuretools.adauth.PromptBehavior;
 import com.microsoft.azuretools.adauth.StringUtils;
 import com.microsoft.azuretools.authmanage.AdAuthManagerBuilder;
@@ -36,21 +34,13 @@ import com.microsoft.azuretools.authmanage.AzureManagerFactory;
 import com.microsoft.azuretools.authmanage.BaseADAuthManager;
 import com.microsoft.azuretools.authmanage.CommonSettings;
 import com.microsoft.azuretools.authmanage.Environment;
-import com.microsoft.azuretools.authmanage.RefreshableTokenCredentials;
 import com.microsoft.azuretools.authmanage.SubscriptionManager;
 import com.microsoft.azuretools.authmanage.SubscriptionManagerPersist;
 import com.microsoft.azuretools.authmanage.models.AuthMethodDetails;
-import com.microsoft.azuretools.telemetry.TelemetryInterceptor;
 import com.microsoft.azuretools.utils.AzureRegisterProviderNamespaces;
-import com.microsoft.azuretools.utils.Pair;
 import com.microsoft.rest.credentials.ServiceClientCredentials;
-import rx.Observable;
 
 import java.io.IOException;
-import java.util.Collections;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.logging.Logger;
 
 import static com.microsoft.azuretools.Constants.FILE_NAME_SUBSCRIPTIONS_DETAILS_AT;
 import static org.apache.commons.lang3.StringUtils.isBlank;
@@ -90,7 +80,6 @@ public class AccessTokenAzureManager extends AzureManagerBase {
         }
     }
 
-    private static final Logger LOGGER = Logger.getLogger(AccessTokenAzureManager.class.getName());
     private final SubscriptionManager subscriptionManager;
     private final BaseADAuthManager delegateADAuthManager;
 
@@ -123,7 +112,7 @@ public class AccessTokenAzureManager extends AzureManagerBase {
             return sidToAzureMap.get(sid);
         }
         String tid = subscriptionManager.getSubscriptionTenant(sid);
-        Azure azure = authTid(tid).withSubscription(sid);
+        Azure azure = authTenant(tid).withSubscription(sid);
         // TODO: remove this call after Azure SDK properly implements handling of unregistered provider namespaces
         AzureRegisterProviderNamespaces.registerAzureNamespaces(azure);
         sidToAzureMap.put(sid, azure);
@@ -147,84 +136,13 @@ public class AccessTokenAzureManager extends AzureManagerBase {
     }
 
     @Override
-    public List<Subscription> getSubscriptions() throws IOException {
-        List<Subscription> sl = new LinkedList<Subscription>();
-        // could be multi tenant - return all subscriptions for the current account
-        List<Tenant> tl = getTenants(delegateADAuthManager.getCommonTenantId());
-        for (Tenant t : tl) {
-            sl.addAll(getSubscriptions(t.tenantId()));
-        }
-        return sl;
-    }
-
-    @Override
-    public List<Pair<Subscription, Tenant>> getSubscriptionsWithTenant() throws IOException {
-        List<Pair<Subscription, Tenant>> stl = new LinkedList<>();
-        for (Tenant t : getTenants(delegateADAuthManager.getCommonTenantId())) {
-            String tid = t.tenantId();
-            for (Subscription s : getSubscriptions(tid)) {
-                stl.add(new Pair<Subscription, Tenant>(s, t));
-            }
-        }
-        return stl;
-    }
-
-    @Override
     public Settings getSettings() {
         return settings;
     }
 
-    public List<Subscription> getSubscriptions(String tid) throws IOException {
-        List<Subscription> sl = authTid(tid).subscriptions().listAsync()
-                .onErrorResumeNext(err -> {
-                    LOGGER.warning(err.getMessage());
-
-                    return Observable.empty();
-                })
-                .toList()
-                .toBlocking()
-                .singleOrDefault(Collections.emptyList());
-
-        return sl;
-    }
-
-    public List<Tenant> getTenants(String tid) throws IOException {
-        List<Tenant> tl = authTid(tid).tenants().listAsync()
-                .onErrorResumeNext(err -> {
-                    LOGGER.warning(err.getMessage());
-
-                    return Observable.empty();
-                })
-                .toList()
-                .toBlocking()
-                .singleOrDefault(Collections.emptyList());
-
-        return tl;
-    }
-
-    //    public static Azure.Authenticated auth(String accessToken) throws Exception {
-    //        return Azure.configure().authenticate(getTokenCredentials(accessToken));
-    //    }
-
-    //    private static TokenCredentials getTokenCredentials(String token) throws Exception {
-    //        return null;
-    //    }
-
-    private Azure.Authenticated authTid(String tid) throws IOException {
-        return Azure.configure()
-                .withInterceptor(new TelemetryInterceptor())
-                .withUserAgent(CommonSettings.USER_AGENT)
-                .authenticate(new RefreshableTokenCredentials(this, tid));
-    }
-
-    private AppPlatformManager authSpringCloud(String sid, String tid) {
-        return buildAzureManager(AppPlatformManager.configure())
-                .authenticate(new RefreshableTokenCredentials(this, tid), sid);
-    }
-
-    private InsightsManager authApplicationInsights(String sid, String tid) {
-        return buildAzureManager(InsightsManager.configure())
-                .authenticate(new RefreshableTokenCredentials(this, tid), sid);
+    @Override
+    protected String getTenantId() {
+        return delegateADAuthManager.getCommonTenantId();
     }
 
     @Override

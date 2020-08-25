@@ -31,8 +31,6 @@ import com.microsoft.azure.keyvault.authentication.KeyVaultCredentials;
 import com.microsoft.azure.management.Azure;
 import com.microsoft.azure.management.applicationinsights.v2015_05_01.implementation.InsightsManager;
 import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.AppPlatformManager;
-import com.microsoft.azure.management.resources.Subscription;
-import com.microsoft.azure.management.resources.Tenant;
 import com.microsoft.azuretools.adauth.PromptBehavior;
 import com.microsoft.azuretools.authmanage.AuthMethod;
 import com.microsoft.azuretools.authmanage.AzureManagerFactory;
@@ -44,20 +42,18 @@ import com.microsoft.azuretools.authmanage.models.AuthMethodDetails;
 import com.microsoft.azuretools.azurecommons.helpers.Nullable;
 import com.microsoft.azuretools.telemetry.TelemetryInterceptor;
 import com.microsoft.azuretools.utils.AzureRegisterProviderNamespaces;
-import com.microsoft.azuretools.utils.Pair;
 import com.microsoft.rest.credentials.ServiceClientCredentials;
 import org.apache.commons.lang.ObjectUtils;
-import org.apache.commons.lang3.StringUtils;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.logging.Logger;
 
 import static com.microsoft.azuretools.Constants.FILE_NAME_SUBSCRIPTIONS_DETAILS_AZ;
 import static com.microsoft.azuretools.authmanage.Environment.ENVIRONMENT_LIST;
 
 public class AzureCliAzureManager extends AzureManagerBase {
+    private static final Logger LOGGER = Logger.getLogger(AzureCliAzureManager.class.getName());
+
     private static final String FAILED_TO_AUTH_WITH_AZURE_CLI = "Failed to auth with Azure CLI";
     private static final String UNABLE_TO_GET_AZURE_CLI_CREDENTIALS = "Unable to get Azure CLI credentials, " +
             "please ensure you have installed Azure CLI and signed in.";
@@ -124,26 +120,8 @@ public class AzureCliAzureManager extends AzureManagerBase {
     }
 
     @Override
-    public List<Subscription> getSubscriptions() {
-        return isSignedIn() ? authenticated.subscriptions().list() : Collections.EMPTY_LIST;
-    }
-
-    @Override
-    public List<Pair<Subscription, Tenant>> getSubscriptionsWithTenant() {
-        if (!isSignedIn()) {
-            return Collections.EMPTY_LIST;
-        }
-        final Tenant subscriptionTenant = authenticated.tenants().list().stream()
-                .filter(tenant -> StringUtils.equals(tenant.tenantId(), authenticated.tenantId()))
-                .findFirst().orElse(null);
-        if (subscriptionTenant == null) {
-            return Collections.EMPTY_LIST;
-        }
-        final List<Pair<Subscription, Tenant>> result = new ArrayList<>();
-        for (Subscription subscription : getSubscriptions()) {
-            result.add(new Pair<>(subscription, subscriptionTenant));
-        }
-        return result;
+    protected String getTenantId() {
+        return authenticated.tenantId();
     }
 
     @Override
