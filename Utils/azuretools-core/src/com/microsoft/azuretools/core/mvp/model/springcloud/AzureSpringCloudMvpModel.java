@@ -23,16 +23,16 @@
 package com.microsoft.azuretools.core.mvp.model.springcloud;
 
 import com.microsoft.azure.PagedList;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.AppResourceProperties;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.DeploymentInstance;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.DeploymentResource;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.DeploymentResourceProperties;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.ServiceResource;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.TestKeys;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.AppPlatformManager;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.AppResourceInner;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.DeploymentResourceInner;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.ServiceResourceInner;
+import com.microsoft.azure.management.appplatform.v2020_07_01.AppResourceProperties;
+import com.microsoft.azure.management.appplatform.v2020_07_01.DeploymentInstance;
+import com.microsoft.azure.management.appplatform.v2020_07_01.DeploymentResource;
+import com.microsoft.azure.management.appplatform.v2020_07_01.DeploymentResourceProperties;
+import com.microsoft.azure.management.appplatform.v2020_07_01.ServiceResource;
+import com.microsoft.azure.management.appplatform.v2020_07_01.TestKeys;
+import com.microsoft.azure.management.appplatform.v2020_07_01.implementation.AppPlatformManager;
+import com.microsoft.azure.management.appplatform.v2020_07_01.implementation.AppResourceInner;
+import com.microsoft.azure.management.appplatform.v2020_07_01.implementation.DeploymentResourceInner;
+import com.microsoft.azure.management.appplatform.v2020_07_01.implementation.ServiceResourceInner;
 import com.microsoft.azure.management.resources.Subscription;
 import com.microsoft.azure.storage.StorageException;
 import com.microsoft.azure.storage.file.CloudFile;
@@ -102,7 +102,7 @@ public class AzureSpringCloudMvpModel {
 
     public static Observable<DeploymentResource> listAllDeploymentsByClusterId(String id) throws IOException {
         return getSpringManager(getSubscriptionId(id)).deployments()
-                .listClusterAllDeploymentsAsync(getResourceGroup(id), getClusterName(id));
+                .listForClusterAsync(getResourceGroup(id), getClusterName(id));
     }
 
     public static AppResourceInner getAppById(String appId) throws IOException {
@@ -148,13 +148,14 @@ public class AzureSpringCloudMvpModel {
     }
 
     public static AppResourceInner setPublic(String appId, boolean isPublic) throws IOException {
+        final AppResourceProperties properties = new AppResourceProperties().withPublicProperty(isPublic);
         return getSpringManager(getSubscriptionId(appId)).apps().inner().update(getResourceGroup(appId),
-                getClusterName(appId), getAppName(appId), new AppResourceProperties().withPublicProperty(isPublic));
+                getClusterName(appId), getAppName(appId), new AppResourceInner().withProperties(properties));
     }
 
     public static AppResourceInner updateAppProperties(String appId, AppResourceProperties update) throws IOException {
         return getSpringManager(getSubscriptionId(appId)).apps().inner().update(getResourceGroup(appId),
-                getClusterName(appId), getAppName(appId), update);
+                getClusterName(appId), getAppName(appId), new AppResourceInner().withProperties(update));
     }
 
     public static DeploymentResourceInner updateProperties(String appId, String activeDeploymentName,
@@ -163,7 +164,8 @@ public class AzureSpringCloudMvpModel {
         String rid = getResourceGroup(appId);
         String cid = getClusterName(appId);
         String appName = getAppName(appId);
-        return getSpringManager(sid).deployments().inner().update(rid, cid, appName, activeDeploymentName, pr);
+        final DeploymentResourceInner resource = new DeploymentResourceInner().withProperties(pr);
+        return getSpringManager(sid).deployments().inner().update(rid, cid, appName, activeDeploymentName, resource);
     }
 
     public static String getTestEndpoint(String appId) throws IOException {

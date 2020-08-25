@@ -22,13 +22,11 @@
 
 package com.microsoft.intellij.util;
 
+import com.microsoft.azure.PagedList;
 import com.microsoft.azure.common.exceptions.AzureExecutionException;
 import com.microsoft.azure.common.logging.Log;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.*;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.AppPlatformManager;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.AppResourceInner;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.DeploymentResourceInner;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.ResourceUploadDefinitionInner;
+import com.microsoft.azure.management.appplatform.v2020_07_01.*;
+import com.microsoft.azure.management.appplatform.v2020_07_01.implementation.*;
 import com.microsoft.azure.storage.StorageException;
 import com.microsoft.azuretools.authmanage.AuthMethodManager;
 import com.microsoft.azuretools.core.mvp.model.springcloud.SpringCloudIdHelper;
@@ -39,6 +37,7 @@ import org.apache.commons.lang3.StringUtils;
 import java.io.File;
 import java.io.IOException;
 import java.net.URISyntaxException;
+import java.security.InvalidParameterException;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.*;
@@ -48,6 +47,9 @@ import static com.microsoft.azuretools.core.mvp.model.springcloud.AzureSpringClo
 public class SpringCloudUtils {
     private static final int SCALING_TIME_OUT = 60; // Use same timeout as service
     private static final String FAILED_TO_SCALE_DEPLOYMENT = "Failed to scale deployment %s of spring cloud app %s";
+    private static final String NO_CLUSTER = "No cluster named %s found in subscription %s";
+    private static final String DEFAULT_SKU_NAME = "S0";
+    private static final String DEFAULT_SKU_TIER = "Standard";
     private static final Map<String, AppPlatformManager> SPRING_MANAGER_CACHE = new ConcurrentHashMap<>();
 
     public static AppResourceInner activeDeployment(AppResourceInner appResourceInner,
@@ -62,7 +64,7 @@ public class SpringCloudUtils {
                 configuration.getResourceGroup(),
                 configuration.getClusterName(),
                 configuration.getAppName(),
-                appResourceProperties);
+                appResourceInner.withProperties(appResourceProperties));
     }
 
     public static AppResourceInner createOrUpdateSpringCloudApp(SpringCloudDeployConfiguration configuration) throws IOException {
@@ -75,16 +77,16 @@ public class SpringCloudUtils {
                 new AppResourceProperties() : appResourceInner.properties(), configuration);
         // Service didn't support update app with PUT (createOrUpdate)
         return appResourceInner == null ?
-               appPlatformManager.apps().inner().createOrUpdate(
-                       configuration.getResourceGroup(),
-                       configuration.getClusterName(),
-                       configuration.getAppName(),
-                       appResourceProperties) :
-               appPlatformManager.apps().inner().update(
-                       configuration.getResourceGroup(),
-                       configuration.getClusterName(),
-                       configuration.getAppName(),
-                       appResourceProperties);
+                appPlatformManager.apps().inner().createOrUpdate(
+                        configuration.getResourceGroup(),
+                        configuration.getClusterName(),
+                        configuration.getAppName(),
+                        new AppResourceInner().withProperties(appResourceProperties)) :
+                appPlatformManager.apps().inner().update(
+                        configuration.getResourceGroup(),
+                        configuration.getClusterName(),
+                        configuration.getAppName(),
+                        appResourceInner.withProperties(appResourceProperties));
     }
 
     public static UserSourceInfo deployArtifact(SpringCloudDeployConfiguration configuration, String artifactPath)
@@ -107,7 +109,7 @@ public class SpringCloudUtils {
             throws IOException, AzureExecutionException {
         final DeploymentResourceInner deployment = getActiveDeployment(configuration);
         return deployment == null ? createDeployment(configuration, userSourceInfo) :
-               updateDeployment(configuration, deployment, userSourceInfo);
+                updateDeployment(configuration, deployment, userSourceInfo);
     }
 
     private static DeploymentResourceInner createDeployment(SpringCloudDeployConfiguration configuration,
@@ -117,20 +119,24 @@ public class SpringCloudUtils {
         final DeploymentSettings deploymentSettings = new DeploymentSettings();
         final RuntimeVersion runtimeVersion = configuration.getRuntimeVersion();
         deploymentSettings.withCpu(configuration.getCpu())
-                          .withInstanceCount(configuration.getInstanceCount())
-                          .withJvmOptions(configuration.getJvmOptions())
-                          .withMemoryInGB(configuration.getMemoryInGB())
-                          .withRuntimeVersion(runtimeVersion)
-                          .withEnvironmentVariables(configuration.getEnvironment());
+                .withJvmOptions(configuration.getJvmOptions())
+                .withMemoryInGB(configuration.getMemoryInGB())
+                .withRuntimeVersion(runtimeVersion)
+                .withEnvironmentVariables(configuration.getEnvironment());
         deploymentProperties.withSource(userSourceInfo).withDeploymentSettings(deploymentSettings);
         // Create deployment
         final String deploymentName = SpringCloudConstants.DEFAULT_DEPLOYMENT_NAME;
+
+        final SkuInner skuInner = SpringCloudUtils.initDeploymentSku(configuration);
+        final DeploymentResourceInner tempDeploymentResource = new DeploymentResourceInner();
+        tempDeploymentResource.withSku(skuInner).withProperties(deploymentProperties);
+
         final DeploymentResourceInner deployment = springManager.deployments().inner().createOrUpdate(
                 configuration.getResourceGroup(),
                 configuration.getClusterName(),
                 configuration.getAppName(),
                 deploymentName,
-                deploymentProperties);
+                tempDeploymentResource);
         springManager.deployments().inner().start(
                 configuration.getResourceGroup(),
                 configuration.getClusterName(),
@@ -145,8 +151,7 @@ public class SpringCloudUtils {
             UserSourceInfo userSourceInfo) throws AzureExecutionException, IOException {
         final String deploymentName = deployment.name();
         final AppPlatformManager springManager = getAppPlatformManager(configuration.getSubscriptionId());
-        final DeploymentSettings previousDeploymentSettings = deployment.properties().deploymentSettings();
-        if (isResourceScaled(configuration, previousDeploymentSettings)) {
+        if (isResourceScaled(configuration, deployment)) {
             Log.info("Scaling deployment...");
             scaleDeployment(deploymentName, configuration);
             Log.info("Scaling deployment done.");
@@ -156,15 +161,15 @@ public class SpringCloudUtils {
         final RuntimeVersion runtimeVersion = configuration.getRuntimeVersion();
         // Update deployment configuration, scale related parameters should be update in scaleDeployment()
         newDeploymentSettings.withJvmOptions(configuration.getJvmOptions())
-                             .withRuntimeVersion(runtimeVersion)
-                             .withEnvironmentVariables(configuration.getEnvironment());
+                .withRuntimeVersion(runtimeVersion)
+                .withEnvironmentVariables(configuration.getEnvironment());
         deploymentProperties.withSource(userSourceInfo).withDeploymentSettings(newDeploymentSettings);
         final DeploymentResourceInner result = springManager.deployments().inner().update(
                 configuration.getResourceGroup(),
                 configuration.getClusterName(),
                 configuration.getAppName(),
                 deploymentName,
-                deploymentProperties);
+                deployment);
         springManager.deployments().inner().start(
                 configuration.getResourceGroup(),
                 configuration.getClusterName(),
@@ -180,15 +185,19 @@ public class SpringCloudUtils {
         final DeploymentResourceProperties deploymentProperties = new DeploymentResourceProperties();
         final DeploymentSettings deploymentSettings = new DeploymentSettings();
         deploymentSettings.withCpu(configuration.getCpu())
-                          .withInstanceCount(configuration.getInstanceCount())
-                          .withMemoryInGB(configuration.getMemoryInGB());
+                .withMemoryInGB(configuration.getMemoryInGB());
         deploymentProperties.withDeploymentSettings(deploymentSettings);
+
+        final SkuInner skuInner = SpringCloudUtils.initDeploymentSku(configuration);
+        final DeploymentResourceInner tempDeploymentResource = new DeploymentResourceInner();
+        tempDeploymentResource.withSku(skuInner).withProperties(deploymentProperties);
+
         springManager.deployments().inner().update(
                 configuration.getResourceGroup(),
                 configuration.getClusterName(),
                 configuration.getAppName(),
                 deploymentName,
-                deploymentProperties);
+                tempDeploymentResource);
         // Wait until deployment scaling done
         final ExecutorService executor = Executors.newSingleThreadExecutor();
         final Future<DeploymentResourceInner> future = executor.submit(() -> {
@@ -207,10 +216,33 @@ public class SpringCloudUtils {
         }
     }
 
-    private static boolean isResourceScaled(SpringCloudDeployConfiguration deploymentConfiguration, DeploymentSettings deploymentSettings) {
+    private static SkuInner initDeploymentSku(SpringCloudDeployConfiguration configuration) throws IOException {
+        final String clusterName = configuration.getClusterName();
+        final String subscriptionId = configuration.getSubscriptionId();
+        final ServiceResourceInner cluster = SpringCloudUtils.getCluster(subscriptionId, clusterName);
+        final SkuInner skuInner = new SkuInner();
+        final SkuInner sku = cluster.sku();
+        skuInner.withName(Objects.isNull(sku) ? DEFAULT_SKU_NAME : sku.name())
+                .withTier(Objects.isNull(sku) ? DEFAULT_SKU_TIER : sku.tier())
+                .withCapacity(configuration.getInstanceCount());
+        return skuInner;
+    }
+
+    private static ServiceResourceInner getCluster(String subscriptionId, String clusterName) throws IOException {
+        final AppPlatformManager springManager = getAppPlatformManager(subscriptionId);
+        final PagedList<ServiceResourceInner> clusterList = springManager.inner().services().list();
+        clusterList.loadAll();
+        return clusterList.stream().filter(appClusterResourceInner -> appClusterResourceInner.name().equals(clusterName))
+                .findFirst()
+                .orElseThrow(() -> new InvalidParameterException(String.format(NO_CLUSTER, clusterName, subscriptionId)));
+    }
+
+    private static boolean isResourceScaled(SpringCloudDeployConfiguration deploymentConfiguration, DeploymentResourceInner deployment) {
+        final DeploymentSettings deploymentSettings = deployment.properties().deploymentSettings();
         return !(Objects.equals(deploymentConfiguration.getCpu(), deploymentSettings.cpu()) &&
                 Objects.equals(deploymentConfiguration.getMemoryInGB(), deploymentSettings.memoryInGB()) &&
-                Objects.equals(deploymentConfiguration.getInstanceCount(), deploymentSettings.instanceCount()));
+                Objects.nonNull(deployment.sku()) &&
+                Objects.equals(deploymentConfiguration.getInstanceCount(), deployment.sku().capacity()));
     }
 
     private static boolean isStableDeploymentResourceProvisioningState(DeploymentResourceProvisioningState state) {
@@ -221,7 +253,7 @@ public class SpringCloudUtils {
                                                                      SpringCloudDeployConfiguration configuration) {
         // Enable persistent disk with default parameters
         final AppResourceProperties result = appResourceProperties == null ?
-                                             new AppResourceProperties() : appResourceProperties;
+                new AppResourceProperties() : appResourceProperties;
         final PersistentDisk previousPersistentDisk = result.persistentDisk();
         final int preStorageSize = (previousPersistentDisk == null || previousPersistentDisk.sizeInGB() == null) ? 0 :
                 previousPersistentDisk.sizeInGB();
@@ -247,7 +279,7 @@ public class SpringCloudUtils {
     private static PersistentDisk getEmptyPersistentDisk() {
         final PersistentDisk persistentDisk = new PersistentDisk();
         persistentDisk.withMountPath(null)
-                      .withSizeInGB(0);
+                .withSizeInGB(0);
         return persistentDisk;
     }
 

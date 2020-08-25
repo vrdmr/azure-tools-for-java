@@ -130,6 +130,11 @@
                 <version>${azure.auth.helper.version}</version>
             </dependency>
             <dependency>
+                <groupId>com.microsoft.azure.appplatform.v2020_07_01</groupId>
+                <artifactId>azure-mgmt-appplatform</artifactId>
+                <version>1.0.0-beta</version>
+            </dependency>
+            <dependency>
                 <groupId>com.microsoft.azure.applicationinsights.v2015_05_01</groupId>
                 <artifactId>azure-mgmt-insights</artifactId>
                 <version>1.0.0-beta</version>

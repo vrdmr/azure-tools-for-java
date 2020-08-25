@@ -24,7 +24,7 @@ package com.microsoft.azuretools.sdkmanage;
 
 import com.microsoft.azure.common.utils.SneakyThrowUtils;
 import com.microsoft.azure.management.applicationinsights.v2015_05_01.implementation.InsightsManager;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.AppPlatformManager;
+import com.microsoft.azure.management.appplatform.v2020_07_01.implementation.AppPlatformManager;
 import org.apache.commons.lang3.StringUtils;
 
 import com.microsoft.azure.AzureEnvironment;

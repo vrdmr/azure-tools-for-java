@@ -23,8 +23,8 @@
 package com.microsoft.intellij.serviceexplorer.azure.springcloud;
 
 import com.intellij.openapi.project.Project;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.DeploymentInstance;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.DeploymentResourceInner;
+import com.microsoft.azure.management.appplatform.v2020_07_01.DeploymentInstance;
+import com.microsoft.azure.management.appplatform.v2020_07_01.implementation.DeploymentResourceInner;
 import com.microsoft.azuretools.azurecommons.helpers.AzureCmdException;
 import com.microsoft.azuretools.core.mvp.model.springcloud.AzureSpringCloudMvpModel;
 import com.microsoft.azuretools.telemetrywrapper.EventUtil;

@@ -24,7 +24,7 @@ package com.microsoft.intellij.forms.springcloud;
 
 import com.intellij.openapi.project.Project;
 import com.intellij.ui.ListCellRendererWithRightAlignedComponent;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.DeploymentInstance;
+import com.microsoft.azure.management.appplatform.v2020_07_01.DeploymentInstance;
 import com.microsoft.intellij.ui.components.AzureDialogWrapper;
 import org.jetbrains.annotations.Nullable;
 

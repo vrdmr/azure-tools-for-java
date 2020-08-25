@@ -23,9 +23,9 @@
 package com.microsoft.tooling.msservices.serviceexplorer.azure.springcloud;
 
 import com.microsoft.azure.common.utils.SneakyThrowUtils;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.DeploymentResourceStatus;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.AppResourceInner;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.DeploymentResourceInner;
+import com.microsoft.azure.management.appplatform.v2020_07_01.DeploymentResourceStatus;
+import com.microsoft.azure.management.appplatform.v2020_07_01.implementation.AppResourceInner;
+import com.microsoft.azure.management.appplatform.v2020_07_01.implementation.DeploymentResourceInner;
 import com.microsoft.azuretools.core.mvp.model.springcloud.AzureSpringCloudMvpModel;
 import com.microsoft.azuretools.core.mvp.model.springcloud.SpringCloudIdHelper;
 import com.microsoft.azuretools.core.mvp.ui.base.MvpPresenter;
