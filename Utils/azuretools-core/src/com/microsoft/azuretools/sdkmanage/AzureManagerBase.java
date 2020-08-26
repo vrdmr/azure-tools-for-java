@@ -44,6 +44,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 import static com.microsoft.azuretools.authmanage.Environment.*;
 
@@ -108,29 +109,27 @@ public abstract class AzureManagerBase implements AzureManager {
 
     @Override
     public List<Subscription> getSubscriptions() throws IOException {
-        List<Subscription> sl = new LinkedList<Subscription>();
-        // could be multi tenant - return all subscriptions for the current account
-        List<Tenant> tl = getTenants(getTenantId());
-        for (Tenant t : tl) {
-            sl.addAll(getSubscriptions(t.tenantId()));
-        }
-        return sl;
+        return getSubscriptionsWithTenant().stream().map(Pair::first).collect(Collectors.toList());
     }
 
     @Override
     public List<Pair<Subscription, Tenant>> getSubscriptionsWithTenant() throws IOException {
-        List<Pair<Subscription, Tenant>> stl = new LinkedList<>();
-        for (Tenant t : getTenants(getTenantId())) {
-            String tid = t.tenantId();
-            for (Subscription s : getSubscriptions(tid)) {
-                stl.add(new Pair<>(s, t));
+        final List<Pair<Subscription, Tenant>> subscriptions = new LinkedList<>();
+        final Azure.Authenticated authentication = authTenant(getTenantId());
+        // could be multi tenant - return all subscriptions for the current account
+        final List<Tenant> tenants = getTenants(authentication);
+        for (Tenant tenant : tenants) {
+            final Azure.Authenticated tenantAuthentication = authTenant(tenant.tenantId());
+            final List<Subscription> tenantSubscriptions = getSubscriptions(tenantAuthentication);
+            for (Subscription subscription : tenantSubscriptions) {
+                subscriptions.add(new Pair<>(subscription, tenant));
             }
         }
-        return stl;
+        return subscriptions;
     }
 
-    private List<Subscription> getSubscriptions(String tid) {
-        return authTenant(tid).subscriptions().listAsync()
+    protected List<Subscription> getSubscriptions(Azure.Authenticated tenantAuthentication) {
+        return tenantAuthentication.subscriptions().listAsync()
                 .onErrorResumeNext(err -> {
                     LOGGER.warning(err.getMessage());
                     return Observable.empty();
@@ -140,8 +139,8 @@ public abstract class AzureManagerBase implements AzureManager {
                 .singleOrDefault(Collections.emptyList());
     }
 
-    private List<Tenant> getTenants(String tid) {
-        return authTenant(tid).tenants().listAsync()
+    protected List<Tenant> getTenants(Azure.Authenticated authentication) {
+        return authentication.tenants().listAsync()
                 .onErrorResumeNext(err -> {
                     LOGGER.warning(err.getMessage());
                     return Observable.empty();

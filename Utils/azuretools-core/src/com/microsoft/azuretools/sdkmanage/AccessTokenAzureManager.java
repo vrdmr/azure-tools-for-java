@@ -27,6 +27,8 @@ import com.microsoft.azure.keyvault.authentication.KeyVaultCredentials;
 import com.microsoft.azure.management.Azure;
 import com.microsoft.azure.management.applicationinsights.v2015_05_01.implementation.InsightsManager;
 import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.AppPlatformManager;
+import com.microsoft.azure.management.resources.Subscription;
+import com.microsoft.azure.management.resources.Tenant;
 import com.microsoft.azuretools.adauth.PromptBehavior;
 import com.microsoft.azuretools.adauth.StringUtils;
 import com.microsoft.azuretools.authmanage.AdAuthManagerBuilder;
@@ -41,6 +43,7 @@ import com.microsoft.azuretools.utils.AzureRegisterProviderNamespaces;
 import com.microsoft.rest.credentials.ServiceClientCredentials;
 
 import java.io.IOException;
+import java.util.List;
 
 import static com.microsoft.azuretools.Constants.FILE_NAME_SUBSCRIPTIONS_DETAILS_AT;
 import static org.apache.commons.lang3.StringUtils.isBlank;
@@ -143,6 +146,14 @@ public class AccessTokenAzureManager extends AzureManagerBase {
     @Override
     protected String getTenantId() {
         return delegateADAuthManager.getCommonTenantId();
+    }
+
+    public List<Subscription> getSubscriptions(String tenantId) {
+        return getSubscriptions(authTenant(tenantId));
+    }
+
+    public List<Tenant> getTenants(String tenantId) {
+        return getTenants(authTenant(tenantId));
     }
 
     @Override
