@@ -22,9 +22,8 @@
 
 package com.microsoft.azuretools.sdkmanage;
 
-import com.microsoft.azure.common.utils.SneakyThrowUtils;
-import com.microsoft.azure.management.applicationinsights.v2015_05_01.implementation.InsightsManager;
-import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.AppPlatformManager;
+import com.microsoft.azure.credentials.AzureTokenCredentials;
+import com.microsoft.azuretools.authmanage.*;
 import org.apache.commons.lang3.StringUtils;
 
 import com.microsoft.azure.AzureEnvironment;
@@ -33,15 +32,9 @@ import com.microsoft.azure.keyvault.KeyVaultClient;
 import com.microsoft.azure.keyvault.authentication.KeyVaultCredentials;
 import com.microsoft.azure.management.Azure;
 import com.microsoft.azuretools.adauth.PromptBehavior;
-import com.microsoft.azuretools.authmanage.AzureManagerFactory;
-import com.microsoft.azuretools.authmanage.CommonSettings;
-import com.microsoft.azuretools.authmanage.Environment;
-import com.microsoft.azuretools.authmanage.SubscriptionManager;
-import com.microsoft.azuretools.authmanage.SubscriptionManagerPersist;
 import com.microsoft.azuretools.authmanage.interact.INotification;
 import com.microsoft.azuretools.authmanage.models.AuthMethodDetails;
 import com.microsoft.azuretools.telemetry.TelemetryInterceptor;
-import com.microsoft.azuretools.utils.AzureRegisterProviderNamespaces;
 import com.microsoft.rest.credentials.ServiceClientCredentials;
 
 import java.io.File;
@@ -49,11 +42,126 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.logging.Logger;
+import java.util.Objects;
 
 import static com.microsoft.azuretools.Constants.FILE_NAME_SUBSCRIPTIONS_DETAILS_SP;
 
 public class ServicePrincipalAzureManager extends AzureManagerBase {
+    private String defaultTenantId;
+    private final File credFile;
+    private ApplicationTokenCredentials credentials;
+    private Environment environment = null;
+
+    static {
+        settings.setSubscriptionsDetailsFileName(FILE_NAME_SUBSCRIPTIONS_DETAILS_SP);
+    }
+
+    public static void cleanPersist() throws IOException {
+        String subscriptionsDetailsFileName = settings.getSubscriptionsDetailsFileName();
+        SubscriptionManagerPersist.deleteSubscriptions(subscriptionsDetailsFileName);
+    }
+
+    public ServicePrincipalAzureManager(String tid, String appId, String appKey) {
+        this.credFile = null;
+        this.credentials = new ApplicationTokenCredentials(appId, tid, appKey, null);
+        this.init();
+    }
+
+    public ServicePrincipalAzureManager(File credFile) {
+        this.credFile = credFile;
+        this.init();
+    }
+
+    @Override
+    public KeyVaultClient getKeyVaultClient(String tid) {
+        ServiceClientCredentials creds = new KeyVaultCredentials() {
+            @Override
+            public String doAuthenticate(String authorization, String resource, String scope) {
+                try {
+                    return ServicePrincipalAzureManager.this.credentials.getToken(resource);
+                } catch (Exception ex) {
+                    throw new RuntimeException(ex);
+                }
+            }
+        };
+        return new KeyVaultClient(creds);
+    }
+
+    @Override
+    public String getAccessToken(String tid, String resource, PromptBehavior promptBehavior) throws IOException {
+        String uri = getManagementURI();
+        return this.credentials.getToken(uri);
+    }
+
+    @Override
+    public String getCurrentUserId() throws IOException {
+        return this.credentials.clientId();
+    }
+
+    @Override
+    protected String getDefaultTenantId() throws IOException {
+        return this.defaultTenantId;
+    }
+
+    @Override
+    protected AzureTokenCredentials getCredentials(String tenantId) {
+        return this.credentials;
+    }
+
+    protected boolean isSignedIn() {
+        return Objects.nonNull(this.credentials) && Objects.nonNull(this.defaultTenantId);
+    }
+
+    @Override
+    public String getManagementURI() throws IOException {
+        // default to global cloud
+        return this.credentials.environment() == null ?
+                AzureEnvironment.AZURE.resourceManagerEndpoint() : this.credentials.environment().resourceManagerEndpoint();
+    }
+
+    private void init() {
+        if (this.credentials == null && credFile != null) {
+            try {
+                this.credentials = ApplicationTokenCredentials.fromFile(credFile);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        final Azure.Authenticated authenticated = Azure.configure()
+                .withInterceptor(new TelemetryInterceptor())
+                .withUserAgent(CommonSettings.USER_AGENT)
+                .authenticate(this.credentials);
+        this.defaultTenantId = authenticated.tenantId();
+        initEnv();
+    }
+
+    private void initEnv() {
+        if (this.environment != null) {
+            return;
+        }
+        try {
+            String managementURI = getManagementURI().toLowerCase();
+            if (managementURI.endsWith("/")) {
+                managementURI = managementURI.substring(0, managementURI.length() - 1);
+            }
+
+            if (AzureEnvironment.AZURE.resourceManagerEndpoint().toLowerCase().startsWith(managementURI)) {
+                this.environment = Environment.GLOBAL;
+            } else if (AzureEnvironment.AZURE_CHINA.resourceManagerEndpoint().toLowerCase().startsWith(managementURI)) {
+                this.environment = Environment.CHINA;
+            } else if (AzureEnvironment.AZURE_GERMANY.resourceManagerEndpoint().toLowerCase().startsWith(managementURI)) {
+                this.environment = Environment.GERMAN;
+            } else if (AzureEnvironment.AZURE_US_GOVERNMENT.resourceManagerEndpoint().toLowerCase().startsWith(managementURI)) {
+                this.environment = Environment.US_GOVERNMENT;
+            } else {
+                this.environment = Environment.GLOBAL;
+            }
+        } catch (Exception e) {
+            this.environment = Environment.GLOBAL;
+        }
+        CommonSettings.setUpEnvironment(this.environment);
+    }
+
     public static class ServicePrincipalAzureManagerFactory implements AzureManagerFactory {
         @Override
         public AzureManager factory(final AuthMethodDetails authMethodDetails) {
@@ -72,195 +180,4 @@ public class ServicePrincipalAzureManager extends AzureManagerBase {
             return new ServicePrincipalAzureManager(new File(credFilePath));
         }
     }
-
-    private static final Logger LOGGER = Logger.getLogger(ServicePrincipalAzureManager.class.getName());
-    private static Settings settings;
-    private final SubscriptionManager subscriptionManager;
-    private final File credFile;
-    private ApplicationTokenCredentials atc;
-    private Environment env = null;
-
-    static {
-        settings = new Settings();
-        settings.setSubscriptionsDetailsFileName(FILE_NAME_SUBSCRIPTIONS_DETAILS_SP);
-    }
-
-    public static void cleanPersist() throws IOException {
-        String subscriptionsDetailsFileName = settings.getSubscriptionsDetailsFileName();
-        SubscriptionManagerPersist.deleteSubscriptions(subscriptionsDetailsFileName);
-    }
-
-    public ServicePrincipalAzureManager(String tid, String appId, String appKey) {
-        this.credFile = null;
-        this.atc = new ApplicationTokenCredentials(appId, tid, appKey, null);
-        this.subscriptionManager = new SubscriptionManagerPersist(this);
-
-        initEnv();
-    }
-
-    public ServicePrincipalAzureManager(File credFile) {
-        this.credFile = credFile;
-        this.subscriptionManager = new SubscriptionManagerPersist(this);
-
-        initEnv();
-    }
-
-    private Azure.Authenticated auth() throws IOException {
-        Azure.Configurable azureConfigurable = Azure.configure()
-                    .withInterceptor(new TelemetryInterceptor())
-                    .withUserAgent(CommonSettings.USER_AGENT);
-        return (atc == null)
-                ? azureConfigurable.authenticate(credFile)
-                : azureConfigurable.authenticate(atc);
-    }
-
-    @Override
-    public Azure getAzure(String sid) throws IOException {
-        if (sidToAzureMap.containsKey(sid)) {
-            return sidToAzureMap.get(sid);
-        }
-        Azure azure = auth().withSubscription(sid);
-        // TODO: remove this call after Azure SDK properly implements handling of unregistered provider namespaces
-        AzureRegisterProviderNamespaces.registerAzureNamespaces(azure);
-        sidToAzureMap.put(sid, azure);
-        return azure;
-    }
-
-    @Override
-    public AppPlatformManager getAzureSpringCloudClient(String sid) throws IOException {
-        return sidToAzureSpringCloudManagerMap.computeIfAbsent(sid, s -> {
-            try {
-                return authSpringCloud(sid);
-            } catch (IOException e) {
-                return SneakyThrowUtils.sneakyThrow(e);
-            }
-        });
-    }
-
-    @Override
-    public InsightsManager getInsightsManager(String sid) throws IOException {
-        return sidToInsightsManagerMap.computeIfAbsent(sid, s -> {
-            try {
-                return authApplicationInsights(sid);
-            } catch (IOException e) {
-                return SneakyThrowUtils.sneakyThrow(e);
-            }
-        });
-    }
-
-    @Override
-    protected String getTenantId() throws IOException {
-        return auth().tenantId();
-    }
-
-    @Override
-    public Settings getSettings() {
-        return settings;
-    }
-
-    @Override
-    public SubscriptionManager getSubscriptionManager() {
-        return subscriptionManager;
-    }
-
-    @Override
-    public void drop() throws IOException {
-        System.out.println("ServicePrincipalAzureManager.drop()");
-        subscriptionManager.cleanSubscriptions();
-    }
-
-    @Override
-    public KeyVaultClient getKeyVaultClient(String tid) {
-        ServiceClientCredentials creds = new KeyVaultCredentials() {
-            @Override
-            public String doAuthenticate(String authorization, String resource, String scope) {
-                try {
-                    initATCIfNeeded();
-                    return atc.getToken(resource);
-                } catch (Exception ex) {
-                    throw new RuntimeException(ex);
-                }
-            }
-        };
-
-        return new KeyVaultClient(creds);
-    }
-
-    @Override
-    public String getCurrentUserId() throws IOException {
-        initATCIfNeeded();
-        return atc.clientId();
-    }
-
-    @Override
-    public String getAccessToken(String tid, String ignored1, PromptBehavior ignored2) throws IOException {
-        String uri = getManagementURI();
-        return atc.getToken(uri);
-    }
-
-    @Override
-    public String getManagementURI() throws IOException {
-        initATCIfNeeded();
-        // default to global cloud
-        return atc.environment() == null ? AzureEnvironment.AZURE.resourceManagerEndpoint() : atc.environment().resourceManagerEndpoint();
-    }
-
-    @Override
-    public Environment getEnvironment() {
-        initEnv();
-        return env;
-    }
-
-    @Override
-    public String getStorageEndpointSuffix() {
-        return getEnvironment().getAzureEnvironment().storageEndpointSuffix();
-    }
-
-    private void initATCIfNeeded() throws IOException {
-        if (atc == null) {
-            atc = ApplicationTokenCredentials.fromFile(credFile);
-        }
-    }
-
-    private void initEnv() {
-        if (env != null) {
-            return;
-        }
-        try {
-            String managementURI = getManagementURI().toLowerCase();
-            if (managementURI.endsWith("/")) {
-                managementURI = managementURI.substring(0, managementURI.length() - 1);
-            }
-
-            if (AzureEnvironment.AZURE.resourceManagerEndpoint().toLowerCase().startsWith(managementURI)) {
-                env = Environment.GLOBAL;
-            } else if (AzureEnvironment.AZURE_CHINA.resourceManagerEndpoint().toLowerCase().startsWith(managementURI)) {
-                env = Environment.CHINA;
-            } else if (AzureEnvironment.AZURE_GERMANY.resourceManagerEndpoint().toLowerCase().startsWith(managementURI)) {
-                env = Environment.GERMAN;
-            } else if (AzureEnvironment.AZURE_US_GOVERNMENT.resourceManagerEndpoint().toLowerCase().startsWith(managementURI)) {
-                env = Environment.US_GOVERNMENT;
-            } else {
-                env = Environment.GLOBAL;
-            }
-        } catch (Exception e) {
-            env = Environment.GLOBAL;
-        }
-        CommonSettings.setUpEnvironment(env);
-    }
-
-    private AppPlatformManager authSpringCloud(String sid) throws IOException {
-        if (credFile != null) {
-            initATCIfNeeded();
-        }
-        return buildAzureManager(AppPlatformManager.configure()).authenticate(atc, sid);
-    }
-
-    private InsightsManager authApplicationInsights(String sid) throws IOException {
-        if (credFile != null) {
-            initATCIfNeeded();
-        }
-        return buildAzureManager(InsightsManager.configure()).authenticate(atc, sid);
-    }
-
 }

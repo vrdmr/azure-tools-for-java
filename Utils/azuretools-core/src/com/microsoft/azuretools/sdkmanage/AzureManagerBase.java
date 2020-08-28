@@ -24,16 +24,20 @@ package com.microsoft.azuretools.sdkmanage;
 
 import com.microsoft.azure.AzureEnvironment;
 import com.microsoft.azure.arm.resources.AzureConfigurable;
+import com.microsoft.azure.credentials.AzureTokenCredentials;
+import com.microsoft.azure.keyvault.KeyVaultClient;
+import com.microsoft.azure.keyvault.authentication.KeyVaultCredentials;
 import com.microsoft.azure.management.Azure;
 import com.microsoft.azure.management.applicationinsights.v2015_05_01.implementation.InsightsManager;
 import com.microsoft.azure.management.appplatform.v2019_05_01_preview.implementation.AppPlatformManager;
 import com.microsoft.azure.management.resources.Subscription;
 import com.microsoft.azure.management.resources.Tenant;
-import com.microsoft.azuretools.authmanage.CommonSettings;
-import com.microsoft.azuretools.authmanage.Environment;
-import com.microsoft.azuretools.authmanage.RefreshableTokenCredentials;
+import com.microsoft.azuretools.adauth.PromptBehavior;
+import com.microsoft.azuretools.authmanage.*;
 import com.microsoft.azuretools.telemetry.TelemetryInterceptor;
+import com.microsoft.azuretools.utils.AzureRegisterProviderNamespaces;
 import com.microsoft.azuretools.utils.Pair;
+import com.microsoft.rest.credentials.ServiceClientCredentials;
 import org.apache.commons.lang3.StringUtils;
 import rx.Observable;
 
@@ -58,10 +62,17 @@ public abstract class AzureManagerBase implements AzureManager {
     private static final String CHINA_SCM_SUFFIX = ".scm.chinacloudsites.cn";
     private static final String GLOBAL_SCM_SUFFIX = ".scm.azurewebsites.net";
 
+    private static final Logger LOGGER = Logger.getLogger(AzureManagerBase.class.getName());
+
     protected Map<String, Azure> sidToAzureMap = new ConcurrentHashMap<>();
     protected Map<String, AppPlatformManager> sidToAzureSpringCloudManagerMap = new ConcurrentHashMap<>();
     protected Map<String, InsightsManager> sidToInsightsManagerMap = new ConcurrentHashMap<>();
-    private static final Logger LOGGER = Logger.getLogger(AzureManagerBase.class.getName());
+    protected final SubscriptionManager subscriptionManager;
+    protected static final Settings settings = new Settings();
+
+    protected AzureManagerBase() {
+        this.subscriptionManager = new SubscriptionManagerPersist(this);
+    }
 
     @Override
     public String getPortalUrl() {
@@ -105,8 +116,6 @@ public abstract class AzureManagerBase implements AzureManager {
                 .withUserAgent(CommonSettings.USER_AGENT);
     }
 
-    protected abstract String getTenantId() throws IOException;
-
     @Override
     public List<Subscription> getSubscriptions() throws IOException {
         return getSubscriptionsWithTenant().stream().map(Pair::first).collect(Collectors.toList());
@@ -115,7 +124,7 @@ public abstract class AzureManagerBase implements AzureManager {
     @Override
     public List<Pair<Subscription, Tenant>> getSubscriptionsWithTenant() throws IOException {
         final List<Pair<Subscription, Tenant>> subscriptions = new LinkedList<>();
-        final Azure.Authenticated authentication = authTenant(getTenantId());
+        final Azure.Authenticated authentication = authTenant(getDefaultTenantId());
         // could be multi tenant - return all subscriptions for the current account
         final List<Tenant> tenants = getTenants(authentication);
         for (Tenant tenant : tenants) {
@@ -128,7 +137,121 @@ public abstract class AzureManagerBase implements AzureManager {
         return subscriptions;
     }
 
-    protected List<Subscription> getSubscriptions(Azure.Authenticated tenantAuthentication) {
+    @Override
+    public Azure getAzure(String sid) throws IOException {
+        if (!isSignedIn()) {
+            return null;
+        }
+        if (sidToAzureMap.containsKey(sid)) {
+            return sidToAzureMap.get(sid);
+        }
+        final String tid = this.subscriptionManager.getSubscriptionTenant(sid);
+        final Azure azure = authTenant(tid).withSubscription(sid);
+        // TODO: remove this call after Azure SDK properly implements handling of unregistered provider namespaces
+        AzureRegisterProviderNamespaces.registerAzureNamespaces(azure);
+        sidToAzureMap.put(sid, azure);
+        return azure;
+    }
+
+    @Override
+    public KeyVaultClient getKeyVaultClient(String tid) {
+        if (!isSignedIn()) {
+            return null;
+        }
+        final ServiceClientCredentials creds = new KeyVaultCredentials() {
+            @Override
+            public String doAuthenticate(String authorization, String resource, String scope) {
+                try {
+                    return getAccessToken(tid, resource, PromptBehavior.Auto);
+                } catch (Exception ex) {
+                    throw new RuntimeException(ex);
+                }
+            }
+        };
+        return new KeyVaultClient(creds);
+    }
+
+    @Override
+    public AppPlatformManager getAzureSpringCloudClient(String sid) throws IOException {
+        if (!isSignedIn()) {
+            return null;
+        }
+        return sidToAzureSpringCloudManagerMap.computeIfAbsent(sid, s -> {
+            String tid = this.subscriptionManager.getSubscriptionTenant(sid);
+            return authSpringCloud(sid, tid);
+        });
+    }
+
+    @Override
+    public InsightsManager getInsightsManager(String sid) throws IOException {
+        if (!isSignedIn()) {
+            return null;
+        }
+        return sidToInsightsManagerMap.computeIfAbsent(sid, s -> {
+            String tid = this.subscriptionManager.getSubscriptionTenant(sid);
+            return authApplicationInsights(sid, tid);
+        });
+    }
+
+    @Override
+    public SubscriptionManager getSubscriptionManager() {
+        return this.subscriptionManager;
+    }
+
+    @Override
+    public Environment getEnvironment() {
+        if (!isSignedIn()) {
+            return null;
+        }
+        return CommonSettings.getEnvironment();
+    }
+
+    @Override
+    public String getManagementURI() throws IOException {
+        if (!isSignedIn()) {
+            return null;
+        }
+        // environments other than global cloud are not supported for interactive login for now
+        return getEnvironment().getAzureEnvironment().resourceManagerEndpoint();
+    }
+
+    public String getStorageEndpointSuffix() {
+        if (!isSignedIn()) {
+            return null;
+        }
+        return getEnvironment().getAzureEnvironment().storageEndpointSuffix();
+    }
+
+    @Override
+    public Settings getSettings() {
+        return settings;
+    }
+
+    @Override
+    public void drop() throws IOException {
+        System.out.println("ServicePrincipalAzureManager.drop()");
+        this.subscriptionManager.cleanSubscriptions();
+    }
+
+    protected abstract String getDefaultTenantId() throws IOException;
+
+    protected boolean isSignedIn() {
+        return false;
+    }
+
+    protected AzureTokenCredentials getCredentials(String tenantId) {
+        return new RefreshableTokenCredentials(this, tenantId);
+    }
+
+    public List<Tenant> getTenants(String tenantId) {
+        return getTenants(authTenant(tenantId));
+    }
+
+    public List<Subscription> getSubscriptions(String tenantId) {
+        return getSubscriptions(authTenant(tenantId));
+    }
+
+    private List<Subscription> getSubscriptions(Azure.Authenticated tenantAuthentication) {
         return tenantAuthentication.subscriptions().listAsync()
                 .onErrorResumeNext(err -> {
                     LOGGER.warning(err.getMessage());
@@ -139,7 +262,7 @@ public abstract class AzureManagerBase implements AzureManager {
                 .singleOrDefault(Collections.emptyList());
     }
 
-    protected List<Tenant> getTenants(Azure.Authenticated authentication) {
+    private List<Tenant> getTenants(Azure.Authenticated authentication) {
         return authentication.tenants().listAsync()
                 .onErrorResumeNext(err -> {
                     LOGGER.warning(err.getMessage());
@@ -151,19 +274,22 @@ public abstract class AzureManagerBase implements AzureManager {
     }
 
     protected Azure.Authenticated authTenant(String tenantId) {
+        final AzureTokenCredentials credentials = getCredentials(tenantId);
         return Azure.configure()
                 .withInterceptor(new TelemetryInterceptor())
                 .withUserAgent(CommonSettings.USER_AGENT)
-                .authenticate(new RefreshableTokenCredentials(this, tenantId));
+                .authenticate(credentials);
     }
 
     protected AppPlatformManager authSpringCloud(String subscriptionId, String tenantId) {
+        final AzureTokenCredentials credentials = getCredentials(tenantId);
         return buildAzureManager(AppPlatformManager.configure())
-                .authenticate(new RefreshableTokenCredentials(this, tenantId), subscriptionId);
+                .authenticate(credentials, subscriptionId);
     }
 
     protected InsightsManager authApplicationInsights(String subscriptionId, String tenantId) {
+        final AzureTokenCredentials credentials = getCredentials(tenantId);
         return buildAzureManager(InsightsManager.configure())
-                .authenticate(new RefreshableTokenCredentials(this, tenantId), subscriptionId);
+                .authenticate(credentials, subscriptionId);
     }
 }
