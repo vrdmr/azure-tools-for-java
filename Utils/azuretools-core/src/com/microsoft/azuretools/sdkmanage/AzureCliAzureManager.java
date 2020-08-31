@@ -22,11 +22,10 @@
 
 package com.microsoft.azuretools.sdkmanage;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.azure.auth.AzureAuthHelper;
 import com.microsoft.azure.auth.AzureTokenWrapper;
 import com.microsoft.azure.common.exceptions.AzureExecutionException;
+import com.microsoft.azure.common.utils.JsonUtils;
 import com.microsoft.azure.credentials.AzureCliCredentials;
 import com.microsoft.azure.management.Azure;
 import com.microsoft.azuretools.adauth.PromptBehavior;
@@ -35,13 +34,13 @@ import com.microsoft.azuretools.authmanage.AzureManagerFactory;
 import com.microsoft.azuretools.authmanage.CommonSettings;
 import com.microsoft.azuretools.authmanage.Environment;
 import com.microsoft.azuretools.authmanage.models.AuthMethodDetails;
-import com.microsoft.azuretools.azurecommons.helpers.NotNull;
 import com.microsoft.azuretools.azurecommons.helpers.Nullable;
 import com.microsoft.azuretools.utils.CommandUtils;
 import com.microsoft.azuretools.utils.Pair;
 import org.apache.commons.lang.ObjectUtils;
 
 import java.io.IOException;
+import java.security.InvalidParameterException;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -55,18 +54,18 @@ import static com.microsoft.azuretools.Constants.FILE_NAME_SUBSCRIPTIONS_DETAILS
 import static com.microsoft.azuretools.authmanage.Environment.ENVIRONMENT_LIST;
 
 public class AzureCliAzureManager extends AzureManagerBase {
-    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String FAILED_TO_AUTH_WITH_AZURE_CLI = "Failed to auth with Azure CLI";
     private static final String UNABLE_TO_GET_AZURE_CLI_CREDENTIALS = "Unable to get Azure CLI credentials, " +
             "please ensure you have installed Azure CLI and signed in.";
+    public static final String CLI_TOKEN_FORMAT_ACCESSOR = "az account get-access-token --output json -t %s";
     public static final String CLI_TOKEN_PROP_ACCESS_TOKEN = "accessToken";
-    public static final String CLI_TOKEN_FORMAT_ACCESSOR = "az.cmd account get-access-token -t %s";
     public static final String CLI_TOKEN_PROP_EXPIRATION = "expiresOn";
+    public static final String PATTERN_TENANT = "[a-zA-Z_\\-0-9]*";
 
     protected Map<String, Pair<String, OffsetDateTime>> tenantTokens = new ConcurrentHashMap<>();
 
-    private String defaultTenantId;
-    private String defaultClientId;
+    private String currentTenantId;
+    private String currentClientId;
 
     static {
         settings.setSubscriptionsDetailsFileName(FILE_NAME_SUBSCRIPTIONS_DETAILS_AZ);
@@ -77,57 +76,34 @@ public class AzureCliAzureManager extends AzureManagerBase {
         if (!this.isSignedIn()) {
             return null;
         }
-        Pair<String, OffsetDateTime> token = tenantTokens.computeIfAbsent(tid, this::getAccessTokenViaCli);
+        Pair<String, OffsetDateTime> token = tenantTokens.get(tid);
         final OffsetDateTime now = LocalDateTime.now().atZone(ZoneId.systemDefault()).toOffsetDateTime().withOffsetSameInstant(ZoneOffset.UTC);
-        if (token.second().isBefore(now)) {
+        if (Objects.isNull(token) || token.second().isBefore(now)) {
             token = this.getAccessTokenViaCli(tid);
             tenantTokens.put(tid, token);
         }
         return token.first();
     }
 
-    /**
-     * refer https://github.com/Azure/azure-sdk-for-java/blob/master/sdk/identity/azure-identity/src/main/java/com/azure/
-     *       identity/implementation/IdentityClient.java#L366
-     */
-    private Pair<String, OffsetDateTime> getAccessTokenViaCli(String tid) {
-        //
-        final String command = String.format("az account get-access-token --output json -t %s", tid);
-        final String jsonToken;
-        try {
-            jsonToken = CommandUtils.exec(command);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-        final Map<String, Object> objectMap = convertJsonToMap(jsonToken);
-        final String strToken = (String) objectMap.get(CLI_TOKEN_PROP_ACCESS_TOKEN);
-        final String strTime = (String) objectMap.get(CLI_TOKEN_PROP_EXPIRATION);
-        final String decoratedTime = String.join("T", strTime.substring(0, strTime.indexOf(".")).split(" "));
-        final OffsetDateTime expiresOn = LocalDateTime.parse(decoratedTime, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
-                .atZone(ZoneId.systemDefault())
-                .toOffsetDateTime().withOffsetSameInstant(ZoneOffset.UTC);
-        return new Pair<>(strToken, expiresOn);
-    }
-
     @Override
     public String getCurrentUserId() {
-        return this.defaultClientId;
+        return this.currentClientId;
     }
 
     @Override
-    protected String getDefaultTenantId() {
-        return this.defaultTenantId;
+    protected String getCurrentTenantId() {
+        return this.currentTenantId;
     }
 
     @Override
     public void drop() throws IOException {
-        this.defaultClientId = null;
-        this.defaultTenantId = null;
+        this.currentClientId = null;
+        this.currentTenantId = null;
         super.drop();
     }
 
     public boolean isSignedIn() {
-        return Objects.nonNull(this.defaultTenantId) && Objects.nonNull(this.defaultClientId);
+        return Objects.nonNull(this.currentTenantId) && Objects.nonNull(this.currentClientId);
     }
 
     public AuthMethodDetails signIn() throws AzureExecutionException {
@@ -141,8 +117,8 @@ public class AzureCliAzureManager extends AzureManagerBase {
             if (authenticated == null) {
                 throw new AzureExecutionException(FAILED_TO_AUTH_WITH_AZURE_CLI);
             }
-            this.defaultClientId = credentials.clientId();
-            this.defaultTenantId = authenticated.tenantId();
+            this.currentClientId = credentials.clientId();
+            this.currentTenantId = authenticated.tenantId();
             final Environment environment = ENVIRONMENT_LIST.stream()
                     .filter(e -> ObjectUtils.equals(credentials.environment(), e.getAzureEnvironment()))
                     .findAny()
@@ -160,15 +136,6 @@ public class AzureCliAzureManager extends AzureManagerBase {
                 // swallow exception while clean up
             }
             throw new AzureExecutionException(FAILED_TO_AUTH_WITH_AZURE_CLI, e);
-        }
-    }
-
-    private static <V> Map<String, V> convertJsonToMap(@NotNull String jsonString) {
-        try {
-            return MAPPER.readValue(jsonString, new TypeReference<Map<String, V>>() {
-            });
-        } catch (Exception ignore) {
-            return null;
         }
     }
 
@@ -196,5 +163,25 @@ public class AzureCliAzureManager extends AzureManagerBase {
 
     private static class LazyLoader {
         static final AzureCliAzureManager INSTANCE = new AzureCliAzureManager();
+    }
+
+    /**
+     * refer https://github.com/Azure/azure-sdk-for-java/blob/master/sdk/identity/azure-identity/src/main/java/com/azure/
+     * identity/implementation/IdentityClient.java#L366
+     */
+    private Pair<String, OffsetDateTime> getAccessTokenViaCli(String tid) throws IOException {
+        if (!tid.matches(PATTERN_TENANT)) {
+            throw new InvalidParameterException(String.format("[%s] is not a valid tenant ID", tid));
+        }
+        final String command = String.format(CLI_TOKEN_FORMAT_ACCESSOR, tid);
+        final String jsonToken = CommandUtils.exec(command);
+        final Map<String, Object> objectMap = JsonUtils.fromJson(jsonToken, Map.class);
+        final String strToken = (String) objectMap.get(CLI_TOKEN_PROP_ACCESS_TOKEN);
+        final String strTime = (String) objectMap.get(CLI_TOKEN_PROP_EXPIRATION);
+        final String decoratedTime = String.join("T", strTime.substring(0, strTime.indexOf(".")).split(" "));
+        final OffsetDateTime expiresOn = LocalDateTime.parse(decoratedTime, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                .atZone(ZoneId.systemDefault())
+                .toOffsetDateTime().withOffsetSameInstant(ZoneOffset.UTC);
+        return new Pair<>(strToken, expiresOn);
     }
 }

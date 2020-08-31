@@ -57,7 +57,7 @@ public class AccessTokenAzureManager extends AzureManagerBase {
     }
 
     @Override
-    protected String getDefaultTenantId() {
+    protected String getCurrentTenantId() {
         return delegateADAuthManager.getCommonTenantId();
     }
 

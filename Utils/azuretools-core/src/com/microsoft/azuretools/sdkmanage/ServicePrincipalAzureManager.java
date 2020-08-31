@@ -43,10 +43,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Objects;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import static com.microsoft.azuretools.Constants.FILE_NAME_SUBSCRIPTIONS_DETAILS_SP;
 
 public class ServicePrincipalAzureManager extends AzureManagerBase {
+    private static final Logger LOGGER = Logger.getLogger(ServicePrincipalAzureManager.class.getName());
+
     private String defaultTenantId;
     private final File credFile;
     private ApplicationTokenCredentials credentials;
@@ -99,7 +103,7 @@ public class ServicePrincipalAzureManager extends AzureManagerBase {
     }
 
     @Override
-    protected String getDefaultTenantId() throws IOException {
+    protected String getCurrentTenantId() throws IOException {
         return this.defaultTenantId;
     }
 
@@ -124,15 +128,18 @@ public class ServicePrincipalAzureManager extends AzureManagerBase {
             try {
                 this.credentials = ApplicationTokenCredentials.fromFile(credFile);
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                LOGGER.log(Level.SEVERE, "failed to init credential from specified file", e);
+                this.credentials = null;
             }
         }
-        final Azure.Authenticated authenticated = Azure.configure()
-                .withInterceptor(new TelemetryInterceptor())
-                .withUserAgent(CommonSettings.USER_AGENT)
-                .authenticate(this.credentials);
-        this.defaultTenantId = authenticated.tenantId();
-        initEnv();
+        if (Objects.nonNull(this.credentials)) {
+            final Azure.Authenticated authenticated = Azure.configure()
+                    .withInterceptor(new TelemetryInterceptor())
+                    .withUserAgent(CommonSettings.USER_AGENT)
+                    .authenticate(this.credentials);
+            this.defaultTenantId = authenticated.tenantId();
+            initEnv();
+        }
     }
 
     private void initEnv() {

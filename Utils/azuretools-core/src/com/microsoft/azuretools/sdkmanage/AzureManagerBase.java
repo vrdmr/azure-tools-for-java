@@ -47,6 +47,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
@@ -124,7 +125,7 @@ public abstract class AzureManagerBase implements AzureManager {
     @Override
     public List<Pair<Subscription, Tenant>> getSubscriptionsWithTenant() throws IOException {
         final List<Pair<Subscription, Tenant>> subscriptions = new LinkedList<>();
-        final Azure.Authenticated authentication = authTenant(getDefaultTenantId());
+        final Azure.Authenticated authentication = authTenant(getCurrentTenantId());
         // could be multi tenant - return all subscriptions for the current account
         final List<Tenant> tenants = getTenants(authentication);
         for (Tenant tenant : tenants) {
@@ -229,11 +230,11 @@ public abstract class AzureManagerBase implements AzureManager {
 
     @Override
     public void drop() throws IOException {
-        System.out.println("ServicePrincipalAzureManager.drop()");
+        LOGGER.log(Level.INFO, "ServicePrincipalAzureManager.drop()");
         this.subscriptionManager.cleanSubscriptions();
     }
 
-    protected abstract String getDefaultTenantId() throws IOException;
+    protected abstract String getCurrentTenantId() throws IOException;
 
     protected boolean isSignedIn() {
         return false;

@@ -35,6 +35,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 public class CommandUtils {
@@ -101,7 +102,7 @@ public class CommandUtils {
         executor.setExitValues(null);
         try {
             executor.execute(commandLine);
-            System.err.println(err.toString());
+            logger.log(Level.SEVERE, err.toString());
             return out.toString();
         } catch (ExecuteException e) {
             // swallow execute exception and return empty
