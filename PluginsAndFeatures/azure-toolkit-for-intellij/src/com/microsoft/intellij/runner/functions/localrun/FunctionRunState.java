@@ -53,6 +53,7 @@ import com.microsoft.azuretools.utils.CommandUtils;
 import com.microsoft.intellij.runner.AzureRunProfileState;
 import com.microsoft.intellij.runner.RunProcessHandler;
 import com.microsoft.intellij.runner.functions.core.FunctionUtils;
+import com.microsoft.intellij.runner.functions.core.JsonUtils;
 import com.microsoft.intellij.util.ReadStreamLineThread;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.lang3.ArrayUtils;
@@ -185,7 +186,8 @@ public class FunctionRunState extends AzureRunProfileState<FunctionApp> {
 
     private ComparableVersion getFuncVersion() throws IOException {
         final File func = new File(functionRunConfiguration.getFuncPath());
-        final String funcVersion = CommandUtils.executeCommandAndGetOutput(func.getAbsolutePath(), new String[]{"-v"}, func.getParentFile());
+        final String funcVersion = CommandUtils.executeCommandAndGetOutput(func.getAbsolutePath(),
+                                                                           new String[]{"-v"}, func.getParentFile());
         if (StringUtils.isEmpty(funcVersion)) {
             return null;
         }
